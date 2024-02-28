@@ -519,7 +519,32 @@ error:
 
 	fast_forward = was_ff;
 }
-static void State_write(void) { // from picoarch
+static SDL_Surface* Menu_thumbnail(SDL_Surface* src_img);
+
+static void downsample(void* __restrict src, void* __restrict dst, uint32_t w, uint32_t h, uint32_t pitch, uint32_t dst_pitch);
+
+static void State_write(SDL_Surface* calling_s) { // from picoarch
+	char bmp_path[256];
+	char slot_path[256];
+	char txt_path[256];
+	char minui_dir[256];
+	char emu_name[256];
+  SDL_Surface* snapshot;
+  SDL_Surface* backing;
+  if (calling_s == screen) {
+    backing = GFX_getBufferCopy();
+    snapshot = SDL_CreateRGBSurface(SDL_SWSURFACE, FIXED_WIDTH,FIXED_HEIGHT,FIXED_DEPTH,0,0,0,0);
+    if (backing->w==FIXED_WIDTH && backing->h==FIXED_HEIGHT) {
+      SDL_BlitSurface(backing, NULL, snapshot, NULL);
+    }
+    else {
+      downsample(backing->pixels,snapshot->pixels,backing->w,backing->h,backing->pitch,snapshot->pitch);
+    }
+  }
+  else {
+    snapshot = calling_s;
+  }
+
 	size_t state_size = core.serialize_size();
 	if (!state_size) return;
 
@@ -551,6 +576,28 @@ static void State_write(void) { // from picoarch
 		goto error;
 	}
 
+	getEmuName(game.path, emu_name);
+	sprintf(minui_dir, USERDATA_PATH "/.minui/%s", emu_name);
+	sprintf(slot_path, "%s/%s.txt", minui_dir, game.name);
+  sprintf(bmp_path, "%s/%s.%d.bmp", minui_dir, game.name, state_slot);
+  SDL_Surface* preview = Menu_thumbnail(snapshot);
+  SDL_RWops* out = SDL_RWFromFile(bmp_path, "wb");
+
+  if (exists(game.m3u_path)) {
+    char* tmp = strrchr(game.m3u_path, '/') + 1;
+    sprintf(txt_path, "%s/%s.%d.txt", minui_dir, tmp, state_slot);
+    tmp = strrchr(game.path, '/') + 1;
+    putFile(txt_path, tmp);
+  }
+
+  SDL_SaveBMP_RW(preview, out, 1);
+  SDL_FreeSurface(preview);
+  if (calling_s == screen) {
+    SDL_FreeSurface(backing);
+    SDL_FreeSurface(snapshot);
+  }
+  putInt(slot_path, state_slot);
+
 error:
 	if (state) free(state);
 	if (state_file) fclose(state_file);
@@ -562,7 +609,7 @@ error:
 static void State_autosave(void) {
 	int last_state_slot = state_slot;
 	state_slot = AUTO_RESUME_SLOT;
-	State_write();
+	State_write(screen);
 	state_slot = last_state_slot;
 }
 static void State_resume(void) {
@@ -1449,7 +1496,7 @@ static void input_poll_callback(void) {
 			}
 			else if (PAD_justPressed(btn)) {
 				switch (i) {
-					case SHORTCUT_SAVE_STATE: State_write(); break;
+					case SHORTCUT_SAVE_STATE: State_write(screen); break;
 					case SHORTCUT_LOAD_STATE: State_read(); break;
 					case SHORTCUT_RESET_GAME: core.reset(); break;
 					case SHORTCUT_CYCLE_SCALE:
@@ -3942,18 +3989,8 @@ static void Menu_loop(void) {
 				
 				case ITEM_SAVE: {
 					state_slot = menu.slot;
-					State_write();
+					State_write(snapshot);
 					status = STATUS_SAVE;
-					SDL_Surface* preview = Menu_thumbnail(snapshot);
-					SDL_RWops* out = SDL_RWFromFile(bmp_path, "wb");
-					if (total_discs) {
-						char* disc_path = disc_paths[disc];
-						putFile(txt_path, disc_path + strlen(base_path));
-						sprintf(bmp_path, "%s/%s.%d.bmp", minui_dir, game.name, menu.slot);
-					}
-					SDL_SaveBMP_RW(preview, out, 1);
-					SDL_FreeSurface(preview);
-					putInt(slot_path, menu.slot);
 					show_menu = 0;
 				}
 				break;
